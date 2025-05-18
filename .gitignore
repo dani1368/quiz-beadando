@@ -10,6 +10,3 @@ obj/
 # SQLite cache fájlok
 *.db-shm
 *.db-wal
-
-# Ezt NE ignoráld, mert kell:
-# app.db  <-- NE tedd ide!

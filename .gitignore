@@ -1,0 +1,15 @@
+# build output
+bin/
+obj/
+
+# IDE-specifikus
+.vscode/
+*.user
+*.suo
+
+# SQLite cache fájlok
+*.db-shm
+*.db-wal
+
+# Ezt NE ignoráld, mert kell:
+# app.db  <-- NE tedd ide!

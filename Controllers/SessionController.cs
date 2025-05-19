@@ -1,5 +1,8 @@
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Data.Sqlite;
+using System.Text;
+using Backend.Utils;
 
 namespace Backend.Controllers
 {
@@ -7,54 +10,43 @@ namespace Backend.Controllers
     [Route("api/[controller]")]
     public class SessionController : ControllerBase
     {
-        private const string DbPath = "Data Source=app.db";
+        private const string StaticSalt = "abc123";
 
         [HttpPost("register")]
         public IActionResult Register([FromForm] string email, [FromForm] string password)
         {
             if (string.IsNullOrWhiteSpace(email) || string.IsNullOrWhiteSpace(password))
-            {
                 return BadRequest(new { reason = "empty" });
-            }
-        
-            var salt = "abc123";
-            var hash = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(password + salt));
-        
-            using var connection = new SqliteConnection(DbPath);
-            connection.Open();
-        
-            // Ellenőrizd, hogy már létezik-e az email
-            var checkCmd = connection.CreateCommand();
-            checkCmd.CommandText = "SELECT COUNT(*) FROM User WHERE Email = $email";
-            checkCmd.Parameters.AddWithValue("$email", email);
-            var exists = (long)checkCmd.ExecuteScalar();
-        
-            if (exists > 0)
-            {
-                return Conflict(new { reason = "exists" }); // HTTP 409 Conflict
-            }
-        
-            // Új felhasználó beszúrása
-            var insertCmd = connection.CreateCommand();
-            insertCmd.CommandText = @"
+
+            using var connection = DbUtils.OpenConnection();
+
+            if (DbUtils.UserExists(connection, email))
+                return Conflict(new { reason = "exists" });
+
+            string hash = HashPassword(password, StaticSalt);
+
+            var cmd = connection.CreateCommand();
+            cmd.CommandText = @"
                 INSERT INTO User (Email, PasswordHash, PasswordSalt)
                 VALUES ($email, $hash, $salt);
                 SELECT last_insert_rowid();
             ";
-            insertCmd.Parameters.AddWithValue("$email", email);
-            insertCmd.Parameters.AddWithValue("$hash", hash);
-            insertCmd.Parameters.AddWithValue("$salt", salt);
-        
-            long userId = (long)insertCmd.ExecuteScalar();
-        
+            cmd.Parameters.AddWithValue("$email", email);
+            cmd.Parameters.AddWithValue("$hash", hash);
+            cmd.Parameters.AddWithValue("$salt", StaticSalt);
+
+            var result = cmd.ExecuteScalar();
+            if (result == null || result == DBNull.Value)
+                return StatusCode(500, new { reason = "insert_failed" });
+
+            long userId = Convert.ToInt64(result);
             return CreateSessionAndSetCookie(connection, userId);
         }
 
         [HttpPost("login")]
         public IActionResult Login([FromForm] string email, [FromForm] string password)
         {
-            using var connection = new SqliteConnection(DbPath);
-            connection.Open();
+            using var connection = DbUtils.OpenConnection();
 
             var cmd = connection.CreateCommand();
             cmd.CommandText = "SELECT UserID, PasswordHash, PasswordSalt FROM User WHERE Email = $email";
@@ -62,21 +54,15 @@ namespace Backend.Controllers
 
             using var reader = cmd.ExecuteReader();
             if (!reader.Read())
-            {
-                // email nincs
                 return NotFound(new { reason = "email" });
-            }
 
             long userId = reader.GetInt64(0);
-            string hash = reader.GetString(1);
-            string salt = reader.GetString(2);
-            string inputHash = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(password + salt));
+            string storedHash = reader.GetString(1);
+            string storedSalt = reader.GetString(2);
+            string inputHash = HashPassword(password, storedSalt);
 
-            if (hash != inputHash)
-            {
-                // jelszó hibás
+            if (storedHash != inputHash)
                 return Unauthorized(new { reason = "password" });
-            }
 
             return CreateSessionAndSetCookie(connection, userId);
         }
@@ -87,8 +73,7 @@ namespace Backend.Controllers
             if (!Request.Cookies.TryGetValue("sessionid", out var sessionCookie))
                 return Ok(new { success = true });
 
-            using var connection = new SqliteConnection(DbPath);
-            connection.Open();
+            using var connection = DbUtils.OpenConnection();
 
             var cmd = connection.CreateCommand();
             cmd.CommandText = "DELETE FROM Session WHERE SessionCookie = $cookie";
@@ -103,21 +88,8 @@ namespace Backend.Controllers
         [HttpGet("check")]
         public IActionResult Check()
         {
-            if (!Request.Cookies.TryGetValue("sessionid", out var sessionCookie))
-                return Ok(new { loggedIn = false });
-
-            using var connection = new SqliteConnection(DbPath);
-            connection.Open();
-
-            var cmd = connection.CreateCommand();
-            cmd.CommandText = @"
-                SELECT UserID FROM Session
-                WHERE SessionCookie = $cookie AND ValidUntil > strftime('%s', 'now')
-            ";
-            cmd.Parameters.AddWithValue("$cookie", sessionCookie);
-
-            var userId = cmd.ExecuteScalar();
-            if (userId == null)
+            using var connection = DbUtils.OpenConnection();
+            if (!DbUtils.TryGetUserIdFromSession(Request, connection, out int userId, out _))
                 return Ok(new { loggedIn = false });
 
             return Ok(new { loggedIn = true, userId });
@@ -126,8 +98,8 @@ namespace Backend.Controllers
         private IActionResult CreateSessionAndSetCookie(SqliteConnection connection, long userId)
         {
             string sessionCookie = Guid.NewGuid().ToString();
-            long validUntil = DateTimeOffset.UtcNow.ToUnixTimeSeconds() + 3600;
-            long loginTime = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            long validUntil = now + 3600;
 
             var cmd = connection.CreateCommand();
             cmd.CommandText = @"
@@ -137,7 +109,7 @@ namespace Backend.Controllers
             cmd.Parameters.AddWithValue("$cookie", sessionCookie);
             cmd.Parameters.AddWithValue("$userId", userId);
             cmd.Parameters.AddWithValue("$validUntil", validUntil);
-            cmd.Parameters.AddWithValue("$loginTime", loginTime);
+            cmd.Parameters.AddWithValue("$loginTime", now);
             cmd.ExecuteNonQuery();
 
             Response.Cookies.Append("sessionid", sessionCookie, new CookieOptions
@@ -149,6 +121,11 @@ namespace Backend.Controllers
             });
 
             return Ok(new { success = true });
+        }
+
+        private static string HashPassword(string password, string salt)
+        {
+            return Convert.ToBase64String(Encoding.UTF8.GetBytes(password + salt));
         }
     }
 }

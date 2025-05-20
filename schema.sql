@@ -59,7 +59,7 @@ CREATE TABLE QuizSession (
   SessionID INTEGER PRIMARY KEY AUTOINCREMENT,
   UserID INTEGER NOT NULL,
   StartTime INTEGER NOT NULL,
-  EndTime INTEGER NOT NULL, -- timeout vagy valódi befejezés
+  EndTime INTEGER NOT NULL,
   DurationSeconds INTEGER NOT NULL,
   Score INTEGER NOT NULL DEFAULT -1,
   CreatedAt INTEGER DEFAULT (strftime('%s', 'now')),

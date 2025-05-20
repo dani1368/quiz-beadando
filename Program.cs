@@ -1,7 +1,7 @@
 var builder = WebApplication.CreateBuilder(args);
 
-builder.Services.AddControllers(); // API vezérlők
-builder.Services.AddEndpointsApiExplorer(); // Swagger támogatás
+builder.Services.AddControllers();
+builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
 var app = builder.Build();

@@ -1,20 +1,17 @@
-fetch("/api/session/check")
-  .then(res => res.json())
-  .then(data => {
-    const loggedIn = data.loggedIn;
-    console.log("Session check:", loggedIn);
+$.get("/api/session/check", (data) => {
+  const show = (sel) => $(sel).removeClass("d-none");
+  const hide = (sel) => $(sel).addClass("d-none");
 
-    if (loggedIn) {
-      $("#loginNav, #signupNav").addClass("d-none");
-      $("#accountNav, #logoutNav").removeClass("d-none");
-    } else {
-      $("#loginNav, #signupNav").removeClass("d-none");
-      $("#accountNav, #logoutNav").addClass("d-none");
-    }
-  });
+  if (data.loggedIn) {
+    hide("#loginNav, #signupNav");
+    show("#accountNav, #logoutNav");
+  } else {
+    show("#loginNav, #signupNav");
+    hide("#accountNav, #logoutNav");
+  }
+});
 
-$("#logoutNav").on("click", function (e) {
+$("#logoutNav").on("click", (e) => {
   e.preventDefault();
-  fetch("/api/session/logout", { method: "POST" })
-    .then(() => window.location.href = "/login.html");
+  $.post("/api/session/logout", () => window.location.href = "/login.html");
 });

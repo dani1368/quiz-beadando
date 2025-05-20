@@ -3,15 +3,10 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Fiókom – Jogosítvány Teszt</title>
+  <title>Fiók – Jogosítvány Teszt</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
   <link rel="stylesheet" href="/css/style.css" />
   <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
-  <style>
-    .score-badge {
-      font-weight: bold;
-    }
-  </style>
 </head>
 <body>
   <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
@@ -21,7 +16,7 @@
         <ul class="navbar-nav ms-auto">
           <li class="nav-item"><a href="/login.html" id="loginNav" class="nav-link d-none">Bejelentkezés</a></li>
           <li class="nav-item"><a href="/register.html" id="signupNav" class="nav-link d-none">Regisztráció</a></li>
-          <li class="nav-item"><a href="/account.html" id="accountNav" class="nav-link d-none">Fiókom</a></li>
+          <li class="nav-item"><a href="/account.html" id="accountNav" class="nav-link d-none">Fiók</a></li>
           <li class="nav-item"><a href="#" id="logoutNav" class="nav-link d-none">Kijelentkezés</a></li>
         </ul>
       </div>
@@ -29,34 +24,31 @@
   </nav>
 
   <main class="container py-5">
-    <h2 class="mb-4">📄 Fiókom</h2>
-
+    <h2 class="mb-4">Fiók:</h2>
     <div class="card mb-4 shadow-sm">
       <div class="card-body">
-        <h5 class="card-title">📅 Korábbi kvízeid</h5>
-        <div id="quizList">
-          <div class="text-muted">Betöltés...</div>
-        </div>
+        <h5 class="card-title">Korábbi kvízeid</h5>
+        <div id="quizList"><div class="text-muted">Betöltés...</div></div>
       </div>
     </div>
   </main>
 
   <script src="/js/nav.js"></script>
   <script>
-    $(function () {
-      const list = $('#quizList');
-      list.html('<div class="text-muted">Betöltés...</div>');
+    $(async () => {
+      const $list = $('#quizList');
 
-      fetch('/api/quiz/history', { credentials: 'include' })
-        .then(res => res.json())
-        .then(data => {
-          if (!data.success || !data.quizzes || data.quizzes.length === 0) {
-            list.html('<div class="alert alert-warning">Még nem töltöttél ki egyetlen kvízt sem.</div>');
-            return;
-          }
+      try {
+        const res = await fetch('/api/quiz/history', { credentials: 'include' });
+        const data = await res.json();
 
-          const table = $('<table class="table table-hover table-bordered align-middle text-center"></table>');
-          table.append(`
+        if (!data.success || !data.quizzes || !data.quizzes.length) {
+          $list.html('<div class="alert alert-warning">Még nem töltöttél ki egyetlen kvízt sem.</div>');
+          return;
+        }
+
+        const $table = $(`
+          <table class="table table-hover table-bordered align-middle text-center">
             <thead class="table-light">
               <tr>
                 <th>Dátum</th>
@@ -65,34 +57,34 @@
                 <th></th>
               </tr>
             </thead>
+            <tbody></tbody>
+          </table>
+        `);
+
+        data.quizzes.forEach(q => {
+          const date = new Date(q.timestamp * 1000).toLocaleString();
+          const percent = Math.round((q.score / q.total) * 100);
+          const minutes = Math.floor(q.duration / 60);
+          const seconds = q.duration % 60;
+          const durationText = `${minutes} perc ${seconds} mp`;
+
+          $table.find("tbody").append(`
+            <tr>
+              <td>${date}</td>
+              <td>
+                <span class="badge bg-success score-badge">${q.score} / ${q.total}</span><br>
+                <small class="text-muted">(${percent}%)</small>
+              </td>
+              <td><span class="text-muted">${durationText}</span></td>
+              <td><a class="btn btn-sm btn-outline-primary" href="/view_quiz.html?id=${q.sessionId}">🔍 Megtekintés</a></td>
+            </tr>
           `);
-
-          const tbody = $('<tbody></tbody>');
-
-          data.quizzes.forEach(q => {
-            const date = new Date(q.timestamp * 1000).toLocaleString();
-            const percent = Math.round((q.score / q.total) * 100);
-            const duration = q.duration || 0;
-            const minutes = Math.floor(duration / 60);
-            const seconds = duration % 60;
-            const durationText = `${minutes} perc ${seconds} mp`;
-
-            tbody.append(`
-              <tr>
-                <td>${date}</td>
-                <td><span class="badge bg-success score-badge">${q.score} / ${q.total}</span><br><small class="text-muted">(${percent}%)</small></td>
-                <td><span class="text-muted">${durationText}</span></td>
-                <td><a class="btn btn-sm btn-outline-primary" href="/view_quiz.html?id=${q.sessionId}">🔍 Megtekintés</a></td>
-              </tr>
-            `);
-          });
-
-          table.append(tbody);
-          list.html(table);
-        })
-        .catch(() => {
-          list.html('<div class="alert alert-danger">Nem sikerült lekérni a korábbi kvízeket.</div>');
         });
+
+        $list.html($table);
+      } catch {
+        $list.html('<div class="alert alert-danger">Nem sikerült lekérni a korábbi kvízeket.</div>');
+      }
     });
   </script>
 </body>

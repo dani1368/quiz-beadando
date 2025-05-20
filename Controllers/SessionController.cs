@@ -1,131 +1,131 @@
-using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Data.Sqlite;
-using System.Text;
 using Backend.Utils;
 
-namespace Backend.Controllers
+namespace Backend.Controllers;
+
+[ApiController]
+[Route("api/[controller]")]
+public class SessionController : ControllerBase
 {
-    [ApiController]
-    [Route("api/[controller]")]
-    public class SessionController : ControllerBase
+    [HttpPost("register")]
+    public IActionResult Register([FromForm] string email, [FromForm] string password)
     {
-        private const string StaticSalt = "abc123";
+        if (string.IsNullOrWhiteSpace(email) || string.IsNullOrWhiteSpace(password))
+            return BadRequest(new { reason = "empty" });
 
-        [HttpPost("register")]
-        public IActionResult Register([FromForm] string email, [FromForm] string password)
+        using var conn = DatabaseHelper.OpenConnection();
+        if (DatabaseHelper.UserExists(conn, email))
+            return Conflict(new { reason = "exists" });
+
+        var salt = PasswordManager.GenerateSalt();
+        var hash = PasswordManager.GeneratePasswordHash(password, salt);
+
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = @"INSERT INTO User (Email, PasswordHash, PasswordSalt) VALUES ($email, $hash, $salt); SELECT last_insert_rowid();";
+        cmd.Parameters.AddWithValue("$email", email);
+        cmd.Parameters.AddWithValue("$hash", hash);
+        cmd.Parameters.AddWithValue("$salt", salt);
+
+        var idObj = cmd.ExecuteScalar();
+        if (idObj is not long userId)
+            return StatusCode(500, new { reason = "insert_failed" });
+
+        return CreateSessionAndSetCookie(conn, userId);
+    }
+
+    [HttpPost("login")]
+    public IActionResult Login([FromForm] string email, [FromForm] string password)
+    {
+        using var conn = DatabaseHelper.OpenConnection();
+
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT UserID, PasswordHash, PasswordSalt FROM User WHERE Email = $email";
+        cmd.Parameters.AddWithValue("$email", email);
+
+        using var reader = cmd.ExecuteReader();
+        if (!reader.Read()) return NotFound(new { reason = "email" });
+
+        var userId = reader.GetInt64(0);
+        var storedHash = reader.GetString(1);
+        var storedSalt = reader.GetString(2);
+
+        if (!PasswordManager.Verify(password, storedSalt, storedHash))
+            return Unauthorized(new { reason = "password" });
+
+        return CreateSessionAndSetCookie(conn, userId);
+    }
+
+    [HttpPost("logout")]
+    public IActionResult Logout()
+    {
+        if (!Request.Cookies.TryGetValue("sessionid", out var sessionCookie))
+            return Ok(new { success = true });
+
+        using var conn = DatabaseHelper.OpenConnection();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "DELETE FROM Session WHERE SessionCookie = $cookie";
+        cmd.Parameters.AddWithValue("$cookie", sessionCookie);
+        cmd.ExecuteNonQuery();
+
+        Response.Cookies.Delete("sessionid");
+        return Ok(new { success = true });
+    }
+
+    [HttpGet("check")]
+    public IActionResult Check()
+    {
+        using var conn = DatabaseHelper.OpenConnection();
+        if (!Request.Cookies.TryGetValue("sessionid", out var cookie))
+            return Ok(new { loggedIn = false });
+
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT UserID, ValidUntil FROM Session WHERE SessionCookie = $cookie";
+        cmd.Parameters.AddWithValue("$cookie", cookie);
+
+        using var reader = cmd.ExecuteReader();
+        if (!reader.Read())
+            return Ok(new { loggedIn = false });
+
+        var userId = reader.GetInt64(0);
+        var validUntil = reader.GetInt64(1);
+        var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+
+        if (now > validUntil)
         {
-            if (string.IsNullOrWhiteSpace(email) || string.IsNullOrWhiteSpace(password))
-                return BadRequest(new { reason = "empty" });
-
-            using var connection = DbUtils.OpenConnection();
-
-            if (DbUtils.UserExists(connection, email))
-                return Conflict(new { reason = "exists" });
-
-            string hash = HashPassword(password, StaticSalt);
-
-            var cmd = connection.CreateCommand();
-            cmd.CommandText = @"
-                INSERT INTO User (Email, PasswordHash, PasswordSalt)
-                VALUES ($email, $hash, $salt);
-                SELECT last_insert_rowid();
-            ";
-            cmd.Parameters.AddWithValue("$email", email);
-            cmd.Parameters.AddWithValue("$hash", hash);
-            cmd.Parameters.AddWithValue("$salt", StaticSalt);
-
-            var result = cmd.ExecuteScalar();
-            if (result == null || result == DBNull.Value)
-                return StatusCode(500, new { reason = "insert_failed" });
-
-            long userId = Convert.ToInt64(result);
-            return CreateSessionAndSetCookie(connection, userId);
-        }
-
-        [HttpPost("login")]
-        public IActionResult Login([FromForm] string email, [FromForm] string password)
-        {
-            using var connection = DbUtils.OpenConnection();
-
-            var cmd = connection.CreateCommand();
-            cmd.CommandText = "SELECT UserID, PasswordHash, PasswordSalt FROM User WHERE Email = $email";
-            cmd.Parameters.AddWithValue("$email", email);
-
-            using var reader = cmd.ExecuteReader();
-            if (!reader.Read())
-                return NotFound(new { reason = "email" });
-
-            long userId = reader.GetInt64(0);
-            string storedHash = reader.GetString(1);
-            string storedSalt = reader.GetString(2);
-            string inputHash = HashPassword(password, storedSalt);
-
-            if (storedHash != inputHash)
-                return Unauthorized(new { reason = "password" });
-
-            return CreateSessionAndSetCookie(connection, userId);
-        }
-
-        [HttpPost("logout")]
-        public IActionResult Logout()
-        {
-            if (!Request.Cookies.TryGetValue("sessionid", out var sessionCookie))
-                return Ok(new { success = true });
-
-            using var connection = DbUtils.OpenConnection();
-
-            var cmd = connection.CreateCommand();
-            cmd.CommandText = "DELETE FROM Session WHERE SessionCookie = $cookie";
-            cmd.Parameters.AddWithValue("$cookie", sessionCookie);
-            cmd.ExecuteNonQuery();
-
+            using var del = conn.CreateCommand();
+            del.CommandText = "DELETE FROM Session WHERE SessionCookie = $cookie";
+            del.Parameters.AddWithValue("$cookie", cookie);
+            del.ExecuteNonQuery();
             Response.Cookies.Delete("sessionid");
-
-            return Ok(new { success = true });
+            return Ok(new { loggedIn = false });
         }
 
-        [HttpGet("check")]
-        public IActionResult Check()
+        return Ok(new { loggedIn = true, userId });
+    }
+
+    private IActionResult CreateSessionAndSetCookie(SqliteConnection conn, long userId)
+    {
+        var cookie = Guid.NewGuid().ToString();
+        var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        var validUntil = now + 3600;
+
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "INSERT INTO Session (SessionCookie, UserID, ValidUntil, LoginTime) VALUES ($cookie, $uid, $validUntil, $login)";
+        cmd.Parameters.AddWithValue("$cookie", cookie);
+        cmd.Parameters.AddWithValue("$uid", userId);
+        cmd.Parameters.AddWithValue("$validUntil", validUntil);
+        cmd.Parameters.AddWithValue("$login", now);
+        cmd.ExecuteNonQuery();
+
+        Response.Cookies.Append("sessionid", cookie, new CookieOptions
         {
-            using var connection = DbUtils.OpenConnection();
-            if (!DbUtils.TryGetUserIdFromSession(Request, connection, out int userId, out _))
-                return Ok(new { loggedIn = false });
+            HttpOnly = true,
+            Secure = false,
+            SameSite = SameSiteMode.Lax,
+            Expires = DateTimeOffset.UtcNow.AddHours(1)
+        });
 
-            return Ok(new { loggedIn = true, userId });
-        }
-
-        private IActionResult CreateSessionAndSetCookie(SqliteConnection connection, long userId)
-        {
-            string sessionCookie = Guid.NewGuid().ToString();
-            long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-            long validUntil = now + 3600;
-
-            var cmd = connection.CreateCommand();
-            cmd.CommandText = @"
-                INSERT INTO Session (SessionCookie, UserID, ValidUntil, LoginTime)
-                VALUES ($cookie, $userId, $validUntil, $loginTime)
-            ";
-            cmd.Parameters.AddWithValue("$cookie", sessionCookie);
-            cmd.Parameters.AddWithValue("$userId", userId);
-            cmd.Parameters.AddWithValue("$validUntil", validUntil);
-            cmd.Parameters.AddWithValue("$loginTime", now);
-            cmd.ExecuteNonQuery();
-
-            Response.Cookies.Append("sessionid", sessionCookie, new CookieOptions
-            {
-                HttpOnly = true,
-                Secure = false,
-                SameSite = SameSiteMode.Lax,
-                Expires = DateTimeOffset.UtcNow.AddHours(1)
-            });
-
-            return Ok(new { success = true });
-        }
-
-        private static string HashPassword(string password, string salt)
-        {
-            return Convert.ToBase64String(Encoding.UTF8.GetBytes(password + salt));
-        }
+        return Ok(new { success = true });
     }
 }
